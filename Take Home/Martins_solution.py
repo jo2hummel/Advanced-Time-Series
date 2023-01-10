@@ -37,15 +37,15 @@ def generate_var_1(coefs, cov, num_steps=100):
 
         # Update the values of the time series
         ts[t] = curr_values + residuals
-    return ts
+    return ts[50:] # Discard first 50 values
 
 
 def generate_ts(T: int, alpha=0.5):
     M = 1000
-    l = T + 4
+    l = T + 50 + 4
     coefs = [[alpha, 0], [0.5, 0.5]]
     cov = [[1, 0.5], [0.5, 1]]
-    ts_data = np.zeros((M, l, 2))
+    ts_data = np.zeros((M, l-50, 2))
     for i in range(M):
         ts_data[i] = generate_var_1(coefs, cov, num_steps=l)
     return ts_data
@@ -101,28 +101,34 @@ def rel_freq_dis(ts_data):
             lag_orders[key][m] = p
 
             # Fit a VAR model with the selected lag order and an intercept
-            model = tsa.VAR(train).fit(p, trend='n')
+            model = tsa.VAR(train).fit(p, trend='c')
 
             # Compute the h-step ahead forecasts
             forecast = model.forecast(train, steps=4)
             # Compute the MSPE for each h
             for index, h in enumerate([1,2,4]):
-                y_true = test[h-1].reshape(2,1)
-                y_pred = forecast[h-1].reshape(2,1)
+                y_true = test[h - 1].reshape(2, 1)
+                y_pred = forecast[h - 1].reshape(2, 1)
                 # Compute the MSE of the residuals
-                if h != 1:
-                    mse = mean_squared_error(test[:h-1], forecast[:h-1])
                 # Extract the coefficient matrix for lag h-1
-                coefs = model.coefs
-                A1 = mp(coefs[0].T, h-1)
-                # Extract the forecast error variance matrix for 1-step ahead forecasts
+                coefs_old = model.params
+                coefs = coefs_old.T
+                k, kp = coefs.shape
+                # B
+                K = 2
+                row0 = np.hstack((np.ones((1, 1)), np.zeros((1, K * p))))
+                rowz = np.hstack((np.zeros((K * (p - 1), 1)), np.identity(K * (p - 1)), np.zeros((K * (p - 1), K))))
+                B = np.vstack((row0, coefs, rowz))
+                # J
+                J = np.hstack((np.zeros((K, 1)), np.identity(K), np.zeros((K, K * (p - 1)))))
                 sigma_u = model.sigma_u
-                # Compute the forecast error variance matrix for h-step ahead forecasts
-                if h == 1:
-                    forecast_error_variance_matrix = A1 @ sigma_u @ A1.T
-                else:
-                    forecast_error_variance_matrix = mse + A1 @ sigma_u @ A1.T
-                mspe[key][m, index] = ((y_true - y_pred).T @ np.linalg.inv(forecast_error_variance_matrix) @ (y_true - y_pred))[0, 0]
+
+                sigma_hat_yh = 0
+                for i in range(h):  # formula at p. 64
+                    PHIi = J @ mp(B, i) @ J.T
+                    part_of_sum = PHIi @ sigma_u @ PHIi.T
+                    sigma_hat_yh += part_of_sum
+                mspe[key][m, index] = ((y_true - y_pred).T @ np.linalg.inv(sigma_hat_yh) @ (y_true - y_pred))[0, 0]
 
             for index, h in enumerate([1,2,4]):
                 # Compute the lower and upper bounds of the 95% prediction interval
@@ -143,7 +149,7 @@ def rel_freq_dis(ts_data):
         rel_freq[key] = np.bincount(lag_orders[key].astype(int)) / M
 
         # Compute the normalized mean squared forecast errors
-        nmse[key] = np.mean(mspe[key], axis=0) / np.mean(mspe[key][:, 0])
+        nmse[key] = np.mean(mspe[key], axis=0)
 
         # Compute the mean empirical interval coverage over the M replications for each horizon
         mean_coverage_1[key] = np.mean(coverage_1[key], axis=0)
@@ -289,8 +295,8 @@ print(f'AIC: Portmanteau test for autocorrelation: {model_aic.test_whiteness().s
 print(f'SC: Portmanteau test for autocorrelation: {model_sc.test_whiteness().summary()}')
 
 # Test for normality of residuals
-print(f'AIC: Normality test: p-value = {model_aic.test_normality().pvalue}')
-print(f'SC: Normality test: p-value = {model_sc.test_normality().pvalue}')
+print(f'AIC: Normality test: p-value = {model_aic.test_normality().summary()}')
+print(f'SC: Normality test: p-value = {model_sc.test_normality().summary()}')
 plt.rcParams['figure.figsize'] = [10,5]
 for r in model_aic.resid.columns:
     fig, axes = plt.subplots(2,2, constrained_layout = True)
@@ -331,11 +337,10 @@ print(resid_corr)
 # e
 
 irfs = model_aic.irf(24)
-irfs.plot(orth=True, impulse='Delta_INFt', response='Delta_FEDFUNDS', signif=0.1)
+irfs.plot(orth=True,  signif=0.1)
 plt.savefig(f'images/2e_shock1.png')
-irfs.plot(orth=True, impulse='Delta_FEDFUNDS', response='Delta_INFt', signif=0.1)
-plt.savefig(f'images/2e_shock2.png')
 plt.show()
+
 
 """
 Based on your VAR model, perform a forecast error variance decomposition of the
@@ -361,10 +366,8 @@ results_levels = model_levels.fit(maxlags=12, ic='aic')
 
 # Compute and plot impulse responses
 irfs_levels = results_levels.irf(24)
-irfs_levels.plot(orth= True, impulse='INFt', response='FEDFUNDS', signif = 0.1)
+irfs_levels.plot(orth= True, signif = 0.1)
 plt.savefig(f'images/2h_shock1.png')
-irfs_levels.plot(orth= True, impulse='FEDFUNDS', response='INFt', signif=0.1)
-plt.savefig(f'images/2h_shock2.png')
 plt.show()
 
 """
